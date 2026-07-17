@@ -1,0 +1,25 @@
+# dependencias
+node_modules
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+*.tsbuildinfo
+
+# entorno
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# sistema
+.DS_Store
+*.log
+
+# demo estática original (previa a Next.js) — se puede borrar
+/index.html
+/css/
+/js/
+/README-estatico.md
