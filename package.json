@@ -10,13 +10,15 @@
   "dependencies": {
     "next": "^16.1.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "three": "0.185.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "0.185.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
