@@ -7,7 +7,6 @@ import {
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { WORKS } from "@/lib/paintings";
 import type { AtelierScene } from "./engine";
@@ -66,6 +65,7 @@ export default function Experience() {
   const [step, setStep] = useState(ENTRY);
   const [detailIndex, setDetailIndex] = useState<number | null>(null);
   const [variation, setVariation] = useState(0);
+  const [fallbackHover, setFallbackHover] = useState(false);
   const [announcement, setAnnouncement] = useState("Entrada a Interactivision");
 
   const goTo = useCallback((nextValue: number, historyMode: HistoryMode = "replace") => {
@@ -235,28 +235,42 @@ export default function Experience() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [closeDetail, detailIndex, goTo, move, openDetail]);
 
-  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
-    if (detailIndex !== null) return;
-    event.preventDefault();
-    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-    wheelTotalRef.current += delta;
-    const preview = clampStep(stepRef.current + clampStep(wheelTotalRef.current / 280));
-    sceneRef.current?.setProgress(preview);
+  const handleWheel = useCallback(
+    (event: WheelEvent) => {
+      if (detailIndex !== null) return;
+      if (event.cancelable) event.preventDefault();
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      wheelTotalRef.current += delta;
+      const preview = clampStep(stepRef.current + clampStep(wheelTotalRef.current / 280));
+      sceneRef.current?.setProgress(preview);
 
-    window.clearTimeout(wheelResetRef.current);
-    wheelResetRef.current = window.setTimeout(() => {
-      wheelTotalRef.current = 0;
-      sceneRef.current?.setProgress(stepRef.current);
-    }, 150);
+      window.clearTimeout(wheelResetRef.current);
+      wheelResetRef.current = window.setTimeout(() => {
+        wheelTotalRef.current = 0;
+        sceneRef.current?.setProgress(stepRef.current);
+      }, 150);
 
-    const now = performance.now();
-    if (Math.abs(wheelTotalRef.current) >= 72 && now - lastWheelMoveRef.current > 260) {
-      lastWheelMoveRef.current = now;
-      const direction = wheelTotalRef.current > 0 ? 1 : -1;
-      wheelTotalRef.current = 0;
-      move(direction);
-    }
-  };
+      const now = performance.now();
+      if (Math.abs(wheelTotalRef.current) >= 72 && now - lastWheelMoveRef.current > 260) {
+        lastWheelMoveRef.current = now;
+        const direction = wheelTotalRef.current > 0 ? 1 : -1;
+        wheelTotalRef.current = 0;
+        move(direction);
+      }
+    },
+    [detailIndex, move],
+  );
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+
+    root.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      root.removeEventListener("wheel", handleWheel);
+      window.clearTimeout(wheelResetRef.current);
+    };
+  }, [handleWheel]);
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (detailIndex !== null) return;
@@ -277,7 +291,22 @@ export default function Experience() {
     sceneRef.current?.setPointer(
       ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 2 - 1,
       ((event.clientY - rect.top) / Math.max(rect.height, 1)) * 2 - 1,
+      event.pointerType !== "touch",
     );
+
+    if (mode === "fallback" && event.pointerType !== "touch") {
+      const hit = rootRef.current?.querySelector<HTMLElement>(".fallback-hit");
+      const hitRect = hit?.getBoundingClientRect();
+      setFallbackHover(
+        Boolean(
+          hitRect
+          && event.clientX >= hitRect.left
+          && event.clientX <= hitRect.right
+          && event.clientY >= hitRect.top
+          && event.clientY <= hitRect.bottom
+        ),
+      );
+    }
 
     if (!dragRef.current.active || dragRef.current.pointerId !== event.pointerId) return;
     dragRef.current.lastX = event.clientX;
@@ -305,11 +334,14 @@ export default function Experience() {
     <div
       ref={rootRef}
       className={`experience mode-${mode}${detailIndex !== null ? " detail-open" : ""}`}
-      onWheel={handleWheel}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={finishDrag}
       onPointerCancel={finishDrag}
+      onPointerLeave={() => {
+        sceneRef.current?.clearPointer();
+        setFallbackHover(false);
+      }}
     >
       <a className="skip-link" href="#scene-content">
         Saltar a la información de la escena
@@ -332,7 +364,7 @@ export default function Experience() {
           } as CSSProperties;
           return (
             <div
-              className="fallback-card"
+              className={`fallback-card${index === step ? " is-active" : ""}${index === step && fallbackHover ? " is-lifting" : ""}`}
               key={work.id}
               style={style}
               aria-hidden="true"
@@ -345,6 +377,10 @@ export default function Experience() {
           <button
             className="fallback-hit"
             onClick={() => openDetail(step)}
+            onPointerEnter={() => setFallbackHover(true)}
+            onPointerLeave={() => setFallbackHover(false)}
+            onFocus={() => setFallbackHover(true)}
+            onBlur={() => setFallbackHover(false)}
             aria-label={`Abrir ${activeWork.title}`}
           />
         )}
@@ -474,7 +510,7 @@ export default function Experience() {
 
       <div className="scene-controls" aria-label="Controles del recorrido">
         <p className="gesture-hint">
-          <span className="desktop-hint">Rueda / arrastra / flechas</span>
+          <span className="desktop-hint">Pasa sobre la obra · rueda / arrastra</span>
           <span className="touch-hint">Desliza para recorrer</span>
         </p>
         <div className="journey-meter" aria-hidden="true">
