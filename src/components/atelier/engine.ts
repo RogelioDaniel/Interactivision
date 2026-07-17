@@ -48,10 +48,17 @@ const VS_RECT = `
 attribute vec2 aPos;
 uniform vec4 uRect;
 uniform vec2 uRes;
+uniform float uRotY;
 varying vec2 vUv;
 void main(){
   vUv = aPos;
-  vec2 px = uRect.xy + aPos * uRect.zw;
+  vec2 half = uRect.zw * 0.5;
+  vec2 center = uRect.xy + half;
+  vec3 p = vec3((aPos - 0.5) * uRect.zw, 0.0);
+  float c = cos(uRotY); float s = sin(uRotY);
+  p = vec3(c * p.x, p.y, -s * p.x);
+  float persp = 1.0 / max(1.0 + p.z * 0.0011, 0.35);
+  vec2 px = center + p.xy * persp;
   vec2 clip = (px / uRes) * 2.0 - 1.0;
   gl_Position = vec4(clip.x, -clip.y, 0.0, 1.0);
 }`;
@@ -186,6 +193,7 @@ uniform float uSeed;
 uniform vec2 uMouseLocal;
 uniform float uAspect;
 uniform float uParallax;
+uniform float uFocus;
 ${NOISE_GLSL}
 void main(){
   vec2 uv = (vUv - 0.5) / 1.12 + 0.5;
@@ -206,6 +214,7 @@ void main(){
   float inner = smoothstep(0.0, bd, vUv.x) * smoothstep(0.0, bd, 1.0 - vUv.x)
               * smoothstep(0.0, bd, vUv.y) * smoothstep(0.0, bd, 1.0 - vUv.y);
   col *= mix(0.55, 1.0, inner);
+  col *= mix(0.45, 1.0, uFocus);
   col *= 0.96 + 0.08 * uHover;
   float g = hash(vUv * 719.3 + fract(uTime * 0.7));
   col += (g - 0.5) * 0.02;
@@ -229,6 +238,10 @@ export interface PlaneState {
   seed: number;
   parallax: number;
   mouseLocal: [number, number];
+  /** rotación Y en radianes (carrusel 3D); 0 = de frente */
+  rotY: number;
+  /** 1 = tarjeta enfocada (centro), hacia 0 se oscurece */
+  focus: number;
 }
 
 export interface RenderState {
@@ -458,6 +471,8 @@ export class AtelierGL {
     gl.uniform2f(gl.getUniformLocation(p, "uMouseLocal"), pl.mouseLocal[0], pl.mouseLocal[1]);
     gl.uniform1f(gl.getUniformLocation(p, "uAspect"), pl.rect[2] / Math.max(pl.rect[3], 1));
     gl.uniform1f(gl.getUniformLocation(p, "uParallax"), pl.parallax);
+    gl.uniform1f(gl.getUniformLocation(p, "uRotY"), pl.rotY);
+    gl.uniform1f(gl.getUniformLocation(p, "uFocus"), pl.focus);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 }

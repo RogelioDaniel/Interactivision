@@ -238,24 +238,35 @@ body.has-cursor button {
   text-transform: uppercase;
 }
 
-.nav ul {
+/* píldora estilo referencia: WORK ~ CONTACT */
+.nav-pill {
   display: flex;
-  gap: clamp(1rem, 3vw, 2.4rem);
-  list-style: none;
+  align-items: center;
+  gap: clamp(0.6rem, 1.6vw, 1.1rem);
+  border: 1px solid rgba(242, 237, 226, 0.35);
+  border-radius: 999px;
+  padding: 0.55rem clamp(0.9rem, 2.4vw, 1.5rem);
+  backdrop-filter: blur(6px);
 }
 
-.nav ul a {
+.nav-pill a {
   font-family: var(--font-mono);
   font-size: 0.68rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  padding: 0.4rem 0.1rem;
+  padding: 0.15rem 0.1rem;
   border-bottom: 1px solid transparent;
   transition: border-color 0.25s ease;
 }
 
-.nav ul a:hover {
+.nav-pill a:hover {
   border-color: var(--ink);
+}
+
+.pill-wave {
+  color: var(--ink-dim);
+  font-size: 0.7rem;
+  user-select: none;
 }
 
 /* ---------- indicador de obra ---------- */
@@ -638,10 +649,13 @@ body.lb-open #app {
   transition: opacity 0.5s ease;
 }
 
+/* panel inferior-izquierdo estilo referencia (mono, terminal) */
 .lb-panel {
-  margin-left: auto;
-  width: min(34rem, 92vw);
-  padding: clamp(1.4rem, 4vw, 3.4rem);
+  position: absolute;
+  left: clamp(1.2rem, 4vw, 3rem);
+  bottom: clamp(1.2rem, 5vh, 3rem);
+  width: min(26rem, 88vw);
+  padding: 0;
 }
 
 #lb-num {
@@ -654,10 +668,12 @@ body.lb-open #app {
 }
 
 #lb-title {
-  font-family: var(--font-display);
-  font-weight: 300;
-  font-size: clamp(1.9rem, 4.4vw, 3.2rem);
-  line-height: 1.08;
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: clamp(1.1rem, 2.6vw, 1.6rem);
+  line-height: 1.2;
   margin-bottom: 0.8rem;
 }
 
@@ -702,54 +718,139 @@ body.lb-open #app {
   color: var(--ink-dim);
 }
 
+#lb-repaint {
+  margin-right: 0.8rem;
+}
+
 #lb-close {
-  position: absolute;
-  top: 1.2rem;
-  right: clamp(1.2rem, 4vw, 3rem);
   font-family: var(--font-mono);
   font-size: 0.7rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--ink);
-  padding: 0.7rem 1rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  transition: border-color 0.25s ease;
+  color: var(--ink-dim);
+  padding: 0.85rem 0.6rem;
+  transition: color 0.25s ease;
 }
 
 #lb-close:hover {
-  border-color: var(--ink);
+  color: var(--ink);
 }
 
-/* móvil: panel debajo de la obra */
+/* móvil: panel como hoja inferior */
 @media (max-width: 900px) {
-  #lightbox {
-    align-items: flex-end;
-  }
   .lb-panel {
-    margin: 0 auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
     width: 100%;
-    max-height: 38vh;
+    max-height: 42vh;
     overflow-y: auto;
     background: linear-gradient(
       to top,
-      rgba(16, 15, 13, 0.92) 70%,
+      rgba(16, 15, 13, 0.94) 75%,
       transparent
     );
-    padding-top: 3rem;
+    padding: 3rem clamp(1.2rem, 5vw, 2rem) 1.2rem;
   }
   .about-grid {
     grid-template-columns: 1fr;
   }
-  .work {
-    width: min(30rem, 92%);
-  }
-  .work:nth-child(3n) {
-    width: min(24rem, 80%);
-  }
-  .work .work-meta {
-    display: none;
-  }
+}
+
+/* ---------- La Sala: carrusel 3D ---------- */
+
+.sala {
+  position: relative;
+}
+
+/* el escenario se queda pegado mientras la sección alta se recorre */
+.sala-stage {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100svh;
+  overflow: hidden;
+}
+
+/* con scroll suave (app fija y transformada) sticky no aplica:
+   el escenario se posiciona por JS con translate3d */
+body.smooth .sala-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  will-change: transform;
+}
+
+/* zona de clic del lienzo central (el dibujo real vive en el canvas GL) */
+#sala-open {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: transparent;
+  border-radius: 4px;
+}
+
+#sala-caption {
+  position: absolute;
+  left: clamp(1.2rem, 4vw, 3rem);
+  bottom: clamp(4.4rem, 9vh, 6rem);
+  max-width: min(24rem, 70vw);
+  pointer-events: none;
+}
+
+#sala-caption .work-num {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--ocre);
+  letter-spacing: 0.14em;
+  display: block;
+  margin-bottom: 0.4rem;
+}
+
+#sala-caption h3 {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: clamp(1rem, 2.2vw, 1.4rem);
+  line-height: 1.25;
+  margin-bottom: 0.35rem;
+}
+
+#sala-caption p {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-dim);
+}
+
+.sala-hint {
+  position: absolute;
+  right: clamp(1.2rem, 4vw, 3rem);
+  bottom: 1.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  pointer-events: none;
+}
+
+.no-gl .sala-stage::before {
+  content: "Tu navegador no soporta WebGL — el catálogo completo está disponible al pie de la página.";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  color: var(--ink-dim);
 }
 
 /* ---------- accesibilidad / movimiento reducido ---------- */

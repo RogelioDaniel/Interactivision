@@ -1,9 +1,9 @@
 "use client";
 
 /* Interactivision — experiencia interactiva.
-   Orquesta scroll con inercia, cursor, sincronía DOM↔GL y lightbox.
-   La lógica vive en boot() (imperativa, portada del prototipo probado);
-   React renderiza la estructura y el efecto la arranca/limpia. */
+   La Sala: carrusel 3D de lienzos flotantes (modelo activetheory.net/work).
+   Scroll vertical secuestrado → desplazamiento horizontal con tilt en
+   perspectiva; clic en el lienzo central → detalle inmersivo. */
 
 import { useEffect, useRef } from "react";
 import { WORKS } from "@/lib/paintings";
@@ -36,22 +36,22 @@ export default function Experience() {
       <div id="cursor-dot" aria-hidden="true" />
       <div id="cursor-ring" aria-hidden="true" data-label="" />
 
-      {/* navegación */}
+      {/* navegación píldora (persistente, estilo referencia) */}
       <nav className="nav" aria-label="Principal">
         <a className="brand" href="#inicio">
           Interactivision
         </a>
-        <ul>
-          <li>
-            <a href="#obras">Obras</a>
-          </li>
-          <li>
-            <a href="#estudio">El estudio</a>
-          </li>
-          <li>
-            <a href="#contacto">Contacto</a>
-          </li>
-        </ul>
+        <div className="nav-pill">
+          <a href="#obras">Obras</a>
+          <span className="pill-wave" aria-hidden="true">
+            〜
+          </span>
+          <a href="#estudio">Estudio</a>
+          <span className="pill-wave" aria-hidden="true">
+            〜
+          </span>
+          <a href="#contacto">Contacto</a>
+        </div>
       </nav>
 
       {/* indicador de obra actual */}
@@ -79,34 +79,49 @@ export default function Experience() {
           </p>
         </header>
 
-        <section id="obras" aria-label="Galería de obras">
+        <section id="obras" aria-label="La sala — galería">
           <div className="section-head">
             <span className="eyebrow">Colección 2025 — 2026</span>
-            <h2>Sala primera</h2>
+            <h2>La sala</h2>
             <p className="note">
-              Seis obras pintadas en vivo por la GPU de tu pantalla. Entra en
-              cualquiera; si quieres, pídele otra variación.
+              Seis lienzos flotando en la sala. Desliza para recorrerla; entra
+              al que te llame y, si quieres, pídele otra variación.
             </p>
           </div>
 
-          <div className="works">
-            {WORKS.map((w, i) => (
-              <figure className="work" key={w.id}>
-                <button
-                  className="work-frame"
-                  data-cursor="Ver"
-                  aria-label={"Ver obra: " + w.title}
-                >
-                  <span className="work-canvas" role="img" aria-label={w.alt} />
-                </button>
-                <figcaption>
-                  <span className="work-num">{pad2(i + 1)}</span>
-                  <h3>{w.title}</h3>
-                  <span className="work-meta">{w.meta}</span>
-                </figcaption>
-              </figure>
-            ))}
+          {/* Carrusel 3D: sección alta; el escenario queda pegado al viewport
+              y el avance vertical se convierte en desplazamiento horizontal */}
+          <div
+            className="sala"
+            style={{ height: (WORKS.length + 1) * 100 + "vh" }}
+          >
+            <div className="sala-stage">
+              <button
+                id="sala-open"
+                data-cursor="Ver"
+                aria-label="Ver la obra al centro de la sala"
+              />
+              <div id="sala-caption">
+                <span id="sala-num" className="work-num">
+                  01
+                </span>
+                <h3 id="sala-title">{WORKS[0].title}</h3>
+                <p id="sala-meta">{WORKS[0].meta}</p>
+              </div>
+              <p className="sala-hint" aria-hidden="true">
+                Desliza para recorrer — ← → también funcionan
+              </p>
+            </div>
           </div>
+
+          {/* catálogo accesible para lectores de pantalla */}
+          <ul className="sr-only">
+            {WORKS.map((w) => (
+              <li key={w.id}>
+                {w.title} — {w.meta}. {w.alt}
+              </li>
+            ))}
+          </ul>
         </section>
 
         <section id="estudio" aria-label="El estudio">
@@ -163,7 +178,7 @@ export default function Experience() {
       {/* espaciador para el scroll suave */}
       <div id="scroll-space" aria-hidden="true" />
 
-      {/* lightbox */}
+      {/* detalle inmersivo */}
       <div
         id="lightbox"
         role="dialog"
@@ -171,9 +186,6 @@ export default function Experience() {
         aria-labelledby="lb-title"
         aria-hidden="true"
       >
-        <button id="lb-close" data-cursor="Cerrar">
-          Cerrar ✕
-        </button>
         <div className="lb-panel">
           <span id="lb-num">01 / {pad2(WORKS.length)}</span>
           <h2 id="lb-title">—</h2>
@@ -181,6 +193,9 @@ export default function Experience() {
           <p id="lb-desc">—</p>
           <button id="lb-repaint" data-cursor="Pintar">
             ↻ Pintar otra variación
+          </button>
+          <button id="lb-close" data-cursor="Cerrar">
+            ← Cerrar
           </button>
           <span className="lb-note">
             Obra generativa — cada variación es única e irrepetible
@@ -196,19 +211,15 @@ export default function Experience() {
    ========================================================= */
 
 interface PlaneCtl {
-  el: HTMLElement;
-  btn: HTMLButtonElement;
-  slot: HTMLElement;
   hover: number;
-  hoverT: number;
   reveal: number;
   revealT: number;
-  vel: number;
   seed: number;
 }
 
 function boot(root: HTMLDivElement): () => void {
   const works = WORKS;
+  const N = works.length;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const finePointer = window.matchMedia("(pointer: fine)").matches;
 
@@ -222,6 +233,12 @@ function boot(root: HTMLDivElement): () => void {
   const progressEl = $<HTMLElement>("#work-progress");
   const cursorDot = $<HTMLElement>("#cursor-dot");
   const cursorRing = $<HTMLElement>("#cursor-ring");
+  const sala = $<HTMLElement>(".sala");
+  const salaStage = $<HTMLElement>(".sala-stage");
+  const salaOpen = $<HTMLButtonElement>("#sala-open");
+  const salaNum = $<HTMLElement>("#sala-num");
+  const salaTitle = $<HTMLElement>("#sala-title");
+  const salaMeta = $<HTMLElement>("#sala-meta");
   const lightbox = $<HTMLElement>("#lightbox");
   const lbTitle = $<HTMLElement>("#lb-title");
   const lbMeta = $<HTMLElement>("#lb-meta");
@@ -240,11 +257,26 @@ function boot(root: HTMLDivElement): () => void {
   const mouse = { x: -100, y: -100, px: -100, py: -100, vx: 0, vy: 0, speed: 0, dir: 0 };
   let lastFocus: Element | null = null;
 
-  const planes: PlaneCtl[] = [];
+  const planes: PlaneCtl[] = works.map((w) => ({
+    hover: 0,
+    reveal: reducedMotion ? 1 : 0,
+    revealT: reducedMotion ? 1 : 0,
+    seed: w.seed,
+  }));
+
+  // carrusel
+  let salaX = 0; // índice flotante (0..N-1) — se lerpea
+  let salaTop = 0;
+  let salaRange = 1; // alto de .sala menos un viewport
+  let centerIdx = 0;
+  let salaHover = false;
+  let salaRevealed = false;
+  const lastRects: [number, number, number, number][] = works.map(() => [0, 0, 1, 1]);
+
   const lb = { open: false, index: -1, p: 0, pT: 0, srcRect: null as number[] | null };
 
   const cleanups: (() => void)[] = [];
-  const on = <K extends keyof WindowEventMap>(
+  const on = (
     target: Window | Document | HTMLElement,
     type: string,
     fn: EventListenerOrEventListenerObject,
@@ -258,22 +290,13 @@ function boot(root: HTMLDivElement): () => void {
 
   function applyNoGL() {
     glOK = false;
-    console.warn("[atelier] WebGL no disponible — usando gradientes CSS");
+    console.warn("[atelier] WebGL no disponible — modo reducido");
     document.body.classList.add("no-gl");
-    works.forEach((w, i) => {
-      const slot = planes[i]?.slot;
-      if (slot) {
-        slot.style.background =
-          "linear-gradient(160deg, " + w.palette[1] + ", " + w.palette[0] + " 55%, " + w.palette[2] + ")";
-      }
-    });
   }
 
   /* ---------- loader ---------- */
 
-  // obras + fuentes (no depender del primer frame de RAF: en pestañas en
-  // segundo plano RAF no corre y el loader quedaría congelado)
-  const loadSteps = works.length + 1;
+  const loadSteps = N + 1; // obras + fuentes (nunca depender del primer RAF)
   let loadDone = 0;
 
   function stepLoaded() {
@@ -286,32 +309,64 @@ function boot(root: HTMLDivElement): () => void {
     }
   }
 
-  /* ---------- obras ---------- */
+  /* ---------- geometría del carrusel ---------- */
 
-  root.querySelectorAll<HTMLElement>(".work").forEach((el, i) => {
-    planes.push({
-      el,
-      btn: el.querySelector(".work-frame") as HTMLButtonElement,
-      slot: el.querySelector(".work-canvas") as HTMLElement,
-      hover: 0,
-      hoverT: 0,
-      reveal: reducedMotion ? 1 : 0,
-      revealT: reducedMotion ? 1 : 0,
-      vel: 0,
-      seed: works[i].seed,
-    });
-  });
+  function cardSize(): [number, number] {
+    const vh = window.innerHeight;
+    const vw = window.innerWidth;
+    const h = Math.min(vh * 0.6, 560, vw * 0.94 * 1.25);
+    return [h * 0.8, h];
+  }
 
-  planes.forEach((pl, i) => {
-    on(pl.btn, "pointerenter", () => (pl.hoverT = 1));
-    on(pl.btn, "pointerleave", () => (pl.hoverT = 0));
-    on(pl.btn, "click", () => openLightbox(i));
-  });
+  function syncSalaMetrics() {
+    salaTop = sala.offsetTop;
+    salaRange = Math.max(sala.offsetHeight - window.innerHeight, 1);
+    const [cw, ch] = cardSize();
+    salaOpen.style.width = cw + "px";
+    salaOpen.style.height = ch + "px";
+  }
+
+  /** rect de la tarjeta i para el desplazamiento actual del carrusel */
+  function cardRect(i: number): [number, number, number, number] {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const [cw, ch] = cardSize();
+    const off = i - salaX;
+    const spacing = cw * 1.22;
+    const scale = 1 / (1 + Math.abs(off) * 0.42);
+    const w = cw * scale;
+    const h = ch * scale;
+    const x = vw / 2 + off * spacing - w / 2;
+    const y = vh / 2 - h / 2 + Math.abs(off) * vh * 0.02;
+    return [x, y, w, h];
+  }
+
+  function updateCaption() {
+    const w = works[centerIdx];
+    salaNum.textContent = pad2(centerIdx + 1);
+    salaTitle.textContent = w.title;
+    salaMeta.textContent = w.meta;
+    const label = pad2(centerIdx + 1) + " / " + pad2(N);
+    if (progressEl.textContent !== label) progressEl.textContent = label;
+    salaOpen.setAttribute("aria-label", "Ver obra: " + w.title);
+  }
+
+  /** navegar con teclado: salta al índice pedido moviendo el scroll real */
+  function goToIndex(idx: number) {
+    const clamped = Math.max(0, Math.min(N - 1, idx));
+    const y = salaTop + (clamped / Math.max(N - 1, 1)) * salaRange;
+    if (smoothScroll) {
+      window.scrollTo(0, y);
+    } else {
+      window.scrollTo({ top: y, behavior: reducedMotion ? "auto" : "smooth" });
+    }
+  }
 
   /* ---------- scroll ---------- */
 
   function syncSpacer() {
     spacer.style.height = app.offsetHeight + "px";
+    syncSalaMetrics();
   }
 
   function anchorTo(hash: string) {
@@ -328,10 +383,6 @@ function boot(root: HTMLDivElement): () => void {
 
   /* ---------- helpers ---------- */
 
-  const rectOf = (el: HTMLElement): [number, number, number, number] => {
-    const r = el.getBoundingClientRect();
-    return [r.left, r.top, r.width, r.height];
-  };
   const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
   const easeInOut = (t: number) =>
     t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -346,32 +397,32 @@ function boot(root: HTMLDivElement): () => void {
     lerp(a[3], b[3], t),
   ];
 
-  /* ---------- lightbox ---------- */
+  /* ---------- detalle inmersivo ---------- */
 
   function lbTargetRect(): [number, number, number, number] {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     if (vw > 900) {
-      const h = Math.min(vh * 0.76, vw * 0.42 * 1.25);
+      const h = Math.min(vh * 0.84, vw * 0.44 * 1.25);
       const w = h * 0.8;
-      return [vw * 0.3 - w / 2, (vh - h) / 2, w, h];
+      return [vw * 0.58 - w / 2, (vh - h) / 2, w, h];
     }
-    const w = Math.min(vw * 0.78, vh * 0.5 * 0.8);
+    const w = Math.min(vw * 0.8, vh * 0.52 * 0.8);
     const h = w * 1.25;
-    return [(vw - w) / 2, vh * 0.06, w, h];
+    return [(vw - w) / 2, vh * 0.05, w, h];
   }
 
-  function openLightbox(i: number) {
+  function openDetail(i: number) {
     if (lb.open) return;
     lb.open = true;
     lb.index = i;
     lb.pT = 1;
-    lb.srcRect = rectOf(planes[i].slot);
+    lb.srcRect = lastRects[i].slice();
     scrollTarget = scrollCur;
     lastFocus = document.activeElement;
 
     const w = works[i];
-    lbNum.textContent = pad2(i + 1) + " / " + pad2(works.length);
+    lbNum.textContent = pad2(i + 1) + " / " + pad2(N);
     lbTitle.textContent = w.title;
     lbMeta.textContent = w.meta;
     lbDesc.textContent = w.desc;
@@ -382,7 +433,7 @@ function boot(root: HTMLDivElement): () => void {
     lbClose.focus();
   }
 
-  function closeLightbox() {
+  function closeDetail() {
     if (!lb.open) return;
     lb.open = false;
     lb.pT = 0;
@@ -408,6 +459,10 @@ function boot(root: HTMLDivElement): () => void {
   let running = true;
   let disposed = false;
   let rafId = 0;
+  let curX = -100,
+    curY = -100,
+    ringX = -100,
+    ringY = -100;
 
   function frame(now: number) {
     if (!running || disposed) return;
@@ -421,6 +476,10 @@ function boot(root: HTMLDivElement): () => void {
       scrollCur = lerp(scrollCur, scrollTarget, 1 - Math.pow(0.001, dt));
       if (Math.abs(scrollCur - scrollTarget) < 0.05) scrollCur = scrollTarget;
       app.style.transform = "translate3d(0," + -scrollCur + "px,0)";
+      // el escenario de la Sala se "pega" manualmente (sticky no funciona
+      // dentro de un contenedor fijo transformado)
+      const stick = Math.max(0, Math.min(scrollCur - salaTop, salaRange));
+      salaStage.style.transform = "translate3d(0," + stick + "px,0)";
     } else {
       scrollCur = window.scrollY;
     }
@@ -444,45 +503,74 @@ function boot(root: HTMLDivElement): () => void {
     }
 
     const vh = window.innerHeight;
-    const renderPlanes: PlaneState[] = [];
-    let nearest = 0;
-    let nearestDist = 1e9;
 
+    // progreso del carrusel a partir del scroll (fuente de verdad: el scroll)
+    const prog = Math.max(0, Math.min((scrollCur - salaTop) / salaRange, 1));
+    const salaXT = prog * (N - 1);
+    salaX = reducedMotion ? salaXT : lerp(salaX, salaXT, 1 - Math.pow(0.002, dt));
+
+    const newCenter = Math.round(Math.max(0, Math.min(N - 1, salaXT)));
+    if (newCenter !== centerIdx) {
+      centerIdx = newCenter;
+      updateCaption();
+    }
+
+    // revelado escalonado la primera vez que la Sala entra al viewport
+    if (!salaRevealed && sala.getBoundingClientRect().top < vh * 0.7) {
+      salaRevealed = true;
+      planes.forEach((pl, i) => {
+        const id = window.setTimeout(() => {
+          pl.revealT = 1;
+        }, 120 * i);
+        cleanups.push(() => window.clearTimeout(id));
+      });
+    }
+
+    // detalle: progreso animado
     lb.p = lerp(lb.p, lb.pT, 1 - Math.pow(0.002, dt));
     if (Math.abs(lb.p - lb.pT) < 0.002) lb.p = lb.pT;
     const lbEase = easeInOut(Math.max(0, Math.min(1, lb.p)));
 
-    for (let i = 0; i < planes.length; i++) {
-      const pl = planes[i];
-      const rect = rectOf(pl.slot);
+    // construir planos: lejanos primero para que el centro tape correcto
+    const order = planes
+      .map((_, i) => i)
+      .sort((a, b) => Math.abs(b - salaX) - Math.abs(a - salaX));
 
-      if (rect[1] < vh * 0.88 && rect[1] + rect[3] > 0) pl.revealT = 1;
+    const renderPlanes: PlaneState[] = [];
+    let activePos = -1;
+
+    for (const i of order) {
+      const pl = planes[i];
+      const rect = cardRect(i);
+      lastRects[i] = rect;
+
+      const off = i - salaX;
       pl.reveal = reducedMotion
         ? pl.revealT
         : lerp(pl.reveal, pl.revealT, 1 - Math.pow(0.05, dt));
-      pl.hover = lerp(pl.hover, pl.hoverT, 1 - Math.pow(0.01, dt));
-      pl.vel = mouse.speed;
+      const hoverT = salaHover && i === centerIdx && !lb.open ? 1 : 0;
+      pl.hover = lerp(pl.hover, hoverT, 1 - Math.pow(0.01, dt));
 
-      const c = rect[1] + rect[3] / 2 - vh / 2;
-      if (Math.abs(c) < nearestDist) {
-        nearestDist = Math.abs(c);
-        nearest = i;
-      }
-
-      let par = reducedMotion ? 0 : Math.max(-0.045, Math.min(0.045, (c / vh) * 0.09));
       let finalRect = rect;
+      let rotY = Math.max(-0.85, Math.min(0.85, -off * 0.5));
+      let focus = 1 / (1 + Math.abs(off) * 1.7);
+      let par = reducedMotion ? 0 : Math.max(-0.045, Math.min(0.045, off * 0.03));
       let hover = pl.hover;
-      if (lb.index === i && lb.p > 0.001) {
+
+      const isActive = lb.index === i && lb.p > 0.001;
+      if (isActive) {
         finalRect = mixRect(lb.srcRect || rect, lbTargetRect(), lbEase);
-        hover = 0;
+        rotY = rotY * (1 - lbEase);
+        focus = lerp(focus, 1, lbEase);
         par = lerp(par, 0, lbEase);
+        hover = 0;
       }
 
-      renderPlanes.push({
+      const st: PlaneState = {
         rect: finalRect,
         tex: glOK && painter ? painter.paintings[i] || null : null,
         hover,
-        vel: pl.vel,
+        vel: mouse.speed,
         reveal: pl.reveal,
         seed: pl.seed,
         parallax: par,
@@ -490,11 +578,22 @@ function boot(root: HTMLDivElement): () => void {
           (mouse.x - finalRect[0]) / Math.max(finalRect[2], 1),
           (mouse.y - finalRect[1]) / Math.max(finalRect[3], 1),
         ],
-      });
+        rotY,
+        focus,
+      };
+
+      if (isActive) {
+        activePos = renderPlanes.length;
+      }
+      renderPlanes.push(st);
     }
 
-    const label = pad2(nearest + 1) + " / " + pad2(planes.length);
-    if (progressEl.textContent !== label) progressEl.textContent = label;
+    // la obra activa se dibuja al final (sobre el velo)
+    if (activePos >= 0 && activePos !== renderPlanes.length - 1) {
+      const [act] = renderPlanes.splice(activePos, 1);
+      renderPlanes.push(act);
+    }
+    if (activePos >= 0) activePos = renderPlanes.length - 1;
 
     if (glOK && painter) {
       try {
@@ -508,7 +607,7 @@ function boot(root: HTMLDivElement): () => void {
           },
           planes: renderPlanes,
           dim: lbEase,
-          activePlane: lb.index >= 0 && lb.p > 0.001 ? lb.index : -1,
+          activePlane: activePos,
         });
       } catch {
         applyNoGL();
@@ -518,18 +617,13 @@ function boot(root: HTMLDivElement): () => void {
     if (lb.index >= 0 && lb.p <= 0.001 && !lb.open) lb.index = -1;
   }
 
-  let curX = -100,
-    curY = -100,
-    ringX = -100,
-    ringY = -100;
-
   /* ---------- arranque ---------- */
 
   try {
     painter = new AtelierGL(canvas, { reducedMotion });
   } catch {
     applyNoGL();
-    for (let k = 0; k < works.length; k++) stepLoaded();
+    for (let k = 0; k < N; k++) stepLoaded();
   }
 
   if (glOK) {
@@ -562,11 +656,12 @@ function boot(root: HTMLDivElement): () => void {
 
   if (smoothScroll) {
     document.body.classList.add("smooth");
-    syncSpacer();
     const ro = new ResizeObserver(syncSpacer);
     ro.observe(app);
     cleanups.push(() => ro.disconnect());
   }
+  syncSpacer();
+  updateCaption();
 
   on(window, "scroll", () => {
     if (!lb.open) scrollTarget = window.scrollY;
@@ -574,8 +669,8 @@ function boot(root: HTMLDivElement): () => void {
 
   on(window, "resize", () => {
     if (glOK && painter) painter.resize();
-    if (smoothScroll) syncSpacer();
-    if (lb.open && lb.index >= 0) lb.srcRect = rectOf(planes[lb.index].slot);
+    syncSpacer();
+    if (lb.open && lb.index >= 0) lb.srcRect = lastRects[lb.index].slice();
   });
 
   on(document, "visibilitychange", () => {
@@ -596,7 +691,7 @@ function boot(root: HTMLDivElement): () => void {
   root.querySelectorAll<HTMLAnchorElement>('a[href^="#"]').forEach((a) => {
     on(a, "click", (e) => {
       e.preventDefault();
-      if (lb.open) closeLightbox();
+      if (lb.open) closeDetail();
       anchorTo(a.getAttribute("href")!);
     });
   });
@@ -619,14 +714,31 @@ function boot(root: HTMLDivElement): () => void {
     });
   }
 
-  on(lbClose, "click", closeLightbox);
+  on(salaOpen, "pointerenter", () => (salaHover = true));
+  on(salaOpen, "pointerleave", () => (salaHover = false));
+  on(salaOpen, "click", () => openDetail(centerIdx));
+
+  on(lbClose, "click", closeDetail);
   on(lbRepaint, "click", repaintActive);
   on(lightbox, "click", (e) => {
-    if (e.target === lightbox) closeLightbox();
+    if (e.target === lightbox) closeDetail();
   });
+
   on(document, "keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Escape") closeLightbox();
+    const ke = e as KeyboardEvent;
+    if (ke.key === "Escape") {
+      closeDetail();
+      return;
+    }
+    // flechas: navegar la Sala cuando está a la vista y sin detalle abierto
+    if (lb.open) return;
+    if (ke.key !== "ArrowLeft" && ke.key !== "ArrowRight") return;
+    const r = sala.getBoundingClientRect();
+    if (r.top > window.innerHeight * 0.6 || r.bottom < window.innerHeight * 0.4) return;
+    ke.preventDefault();
+    goToIndex(centerIdx + (ke.key === "ArrowRight" ? 1 : -1));
   });
+
   on(window, "touchmove", (e) => {
     const te = e as TouchEvent;
     if (te.touches.length) {
