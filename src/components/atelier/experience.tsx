@@ -59,7 +59,15 @@ export default function Experience() {
   const wheelTotalRef = useRef(0);
   const wheelResetRef = useRef<number>(0);
   const lastWheelMoveRef = useRef(0);
-  const dragRef = useRef({ active: false, pointerId: -1, startX: 0, lastX: 0 });
+  const dragRef = useRef({
+    active: false,
+    pointerId: -1,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    maxTravel: 0,
+  });
 
   const [mode, setMode] = useState<SceneMode>("loading");
   const [step, setStep] = useState(ENTRY);
@@ -73,6 +81,7 @@ export default function Experience() {
     stepRef.current = next;
     setStep(next);
     setDetailIndex(null);
+    setFallbackHover(false);
     sceneRef.current?.setDetail(null);
     sceneRef.current?.setProgress(next);
     setAnnouncement(stepLabel(next));
@@ -191,7 +200,7 @@ export default function Experience() {
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target?.matches("input, textarea, select")) return;
+      if (target?.closest("input, textarea, select, a, button, [contenteditable='true']")) return;
 
       if (detailIndex !== null) {
         if (event.key === "Escape") {
@@ -273,14 +282,17 @@ export default function Experience() {
   }, [handleWheel]);
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (detailIndex !== null) return;
+    if (detailIndex !== null || !event.isPrimary) return;
     const target = event.target as Element;
     if (target.closest("a, button")) return;
     dragRef.current = {
       active: true,
       pointerId: event.pointerId,
       startX: event.clientX,
+      startY: event.clientY,
       lastX: event.clientX,
+      lastY: event.clientY,
+      maxTravel: 0,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     rootRef.current?.classList.add("is-dragging");
@@ -297,19 +309,32 @@ export default function Experience() {
     if (mode === "fallback" && event.pointerType !== "touch") {
       const hit = rootRef.current?.querySelector<HTMLElement>(".fallback-hit");
       const hitRect = hit?.getBoundingClientRect();
-      setFallbackHover(
-        Boolean(
-          hitRect
-          && event.clientX >= hitRect.left
-          && event.clientX <= hitRect.right
-          && event.clientY >= hitRect.top
-          && event.clientY <= hitRect.bottom
-        ),
+      const isOverPainting = Boolean(
+        hitRect
+        && event.clientX >= hitRect.left
+        && event.clientX <= hitRect.right
+        && event.clientY >= hitRect.top
+        && event.clientY <= hitRect.bottom
       );
+      if (hitRect && isOverPainting) {
+        const brushX = ((event.clientX - hitRect.left) / Math.max(hitRect.width, 1)) * 100;
+        const brushY = ((event.clientY - hitRect.top) / Math.max(hitRect.height, 1)) * 100;
+        rootRef.current?.style.setProperty("--brush-x", `${Math.max(0, Math.min(100, brushX))}%`);
+        rootRef.current?.style.setProperty("--brush-y", `${Math.max(0, Math.min(100, brushY))}%`);
+      }
+      setFallbackHover(isOverPainting);
     }
 
     if (!dragRef.current.active || dragRef.current.pointerId !== event.pointerId) return;
     dragRef.current.lastX = event.clientX;
+    dragRef.current.lastY = event.clientY;
+    dragRef.current.maxTravel = Math.max(
+      dragRef.current.maxTravel,
+      Math.hypot(
+        event.clientX - dragRef.current.startX,
+        event.clientY - dragRef.current.startY,
+      ),
+    );
     const distance = event.clientX - dragRef.current.startX;
     const travel = Math.min(460, Math.max(220, rect.width * 0.36));
     sceneRef.current?.setProgress(clampStep(stepRef.current - distance / travel));
@@ -318,13 +343,34 @@ export default function Experience() {
   const finishDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!dragRef.current.active || dragRef.current.pointerId !== event.pointerId) return;
     const distance = dragRef.current.lastX - dragRef.current.startX;
+    const maxTravel = dragRef.current.maxTravel;
     dragRef.current.active = false;
     rootRef.current?.classList.remove("is-dragging");
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
-    if (Math.abs(distance) > 52) move(distance < 0 ? 1 : -1);
-    else sceneRef.current?.setProgress(stepRef.current);
+    if (Math.abs(distance) > 52) {
+      move(distance < 0 ? 1 : -1);
+      return;
+    }
+
+    sceneRef.current?.setProgress(stepRef.current);
+    if (maxTravel > 10 || mode !== "webgl") return;
+
+    const rect = event.currentTarget.getBoundingClientRect();
+    const pointerX = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * 2 - 1;
+    const pointerY = ((event.clientY - rect.top) / Math.max(rect.height, 1)) * 2 - 1;
+    const picked = sceneRef.current?.pickWorkAt(pointerX, pointerY);
+    if (picked === null || picked === undefined) return;
+    if (picked !== stepRef.current) goTo(picked, "replace");
+    openDetail(picked);
+  };
+
+  const cancelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current.active || dragRef.current.pointerId !== event.pointerId) return;
+    dragRef.current.active = false;
+    rootRef.current?.classList.remove("is-dragging");
+    sceneRef.current?.setProgress(stepRef.current);
   };
 
   const activeWork = step >= 0 && step < WORKS.length ? WORKS[step] : null;
@@ -337,7 +383,7 @@ export default function Experience() {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={finishDrag}
-      onPointerCancel={finishDrag}
+      onPointerCancel={cancelDrag}
       onPointerLeave={() => {
         sceneRef.current?.clearPointer();
         setFallbackHover(false);
@@ -373,7 +419,7 @@ export default function Experience() {
             </div>
           );
         })}
-        {mode === "fallback" && activeWork && (
+        {mode === "fallback" && activeWork && detailIndex === null && (
           <button
             className="fallback-hit"
             onClick={() => openDetail(step)}
@@ -457,6 +503,18 @@ export default function Experience() {
             <p className="hero-statement">
               La obra no está colgada en una página. Está dentro de una sala que cambia mientras la recorres.
             </p>
+            <div className="entry-instruction" role="note">
+              <span className="instruction-brush" aria-hidden="true" />
+              <div>
+                <strong>Cómo entrar</strong>
+                <p className="desktop-instruction">
+                  Mueve el cursor sobre cada lienzo para revelar la pintura. Haz clic para entrar.
+                </p>
+                <p className="touch-instruction">
+                  Toca una pintura para entrar. Desliza para recorrer.
+                </p>
+              </div>
+            </div>
             <button className="text-action" onClick={() => goTo(0, "push")}>
               Entrar a la sala <span aria-hidden="true">→</span>
             </button>
@@ -510,8 +568,8 @@ export default function Experience() {
 
       <div className="scene-controls" aria-label="Controles del recorrido">
         <p className="gesture-hint">
-          <span className="desktop-hint">Pasa sobre la obra · rueda / arrastra</span>
-          <span className="touch-hint">Desliza para recorrer</span>
+          <span className="desktop-hint">Mueve para revelar · clic para entrar · rueda / arrastra</span>
+          <span className="touch-hint">Toca la obra para entrar · desliza para recorrer</span>
         </p>
         <div className="journey-meter" aria-hidden="true">
           {Array.from({ length: CONTACT - ENTRY + 1 }, (_, index) => index + ENTRY).map((position) => (
@@ -533,27 +591,30 @@ export default function Experience() {
 
       {detailWork && (
         <div className="detail-layer">
-          <button className="detail-backdrop" onClick={closeDetail} aria-label="Cerrar detalle" />
           <section
             ref={dialogRef}
             className="detail-panel"
             role="dialog"
             aria-modal="true"
             aria-labelledby="detail-title"
+            aria-describedby="detail-description"
           >
-            <p className="scene-kicker">
-              {pad2(detailIndex! + 1)} / {pad2(WORKS.length)} · Obra generativa
-            </p>
-            <h2 id="detail-title">{detailWork.title}</h2>
-            <p className="detail-meta">{detailWork.meta}</p>
-            <p className="detail-description">{detailWork.desc}</p>
-            <div className="detail-actions">
-              <button onClick={repaint}>↻ Pintar otra variación</button>
-              <button ref={closeRef} onClick={closeDetail}>
-                ← Cerrar
+            <button ref={closeRef} className="inside-back" onClick={closeDetail}>
+              <span aria-hidden="true">←</span> Volver a la sala
+            </button>
+            <div className="inside-caption">
+              <p className="scene-kicker">
+                {pad2(detailIndex! + 1)} / {pad2(WORKS.length)} · Dentro de la obra
+              </p>
+              <h2 id="detail-title">{detailWork.title}</h2>
+              <p className="detail-meta">{detailWork.meta}</p>
+            </div>
+            <div className="inside-notes">
+              <p id="detail-description" className="detail-description">{detailWork.desc}</p>
+              <button className="repaint-action" onClick={repaint}>
+                ↻ Otra variación
               </button>
             </div>
-            <small>Cada variación se genera en tu dispositivo y no se repite.</small>
           </section>
         </div>
       )}

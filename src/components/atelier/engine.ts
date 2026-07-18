@@ -15,9 +15,18 @@ type WorkMesh = {
   art: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   frame: THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshStandardMaterial>;
   shadow: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  revealCanvas: HTMLCanvasElement;
+  revealContext: CanvasRenderingContext2D;
+  revealTexture: THREE.CanvasTexture;
+  lastRevealUv: THREE.Vector2 | null;
   baseY: number;
   baseTilt: number;
   hover: number;
+};
+
+type WorkHit = {
+  index: number;
+  intersection: THREE.Intersection<THREE.Object3D>;
 };
 
 type ChapterMesh = {
@@ -150,72 +159,45 @@ function canvasTexture(canvas: HTMLCanvasElement, renderer: THREE.WebGLRenderer)
   return texture;
 }
 
+function revealTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 320;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("El navegador no pudo preparar la capa de revelado.");
+  context.fillStyle = "#000";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return { canvas, context, texture };
+}
+
 const PAINT_VERTEX_SHADER = /* glsl */ `
-  uniform float uHover;
-  uniform float uTime;
-  uniform float uSeed;
-
   varying vec2 vUv;
-  varying float vPigmentField;
-  varying float vLift;
-
-  float hash21(vec2 point) {
-    point = fract(point * vec2(123.34, 456.21));
-    point += dot(point, point + 45.32);
-    return fract(point.x * point.y);
-  }
-
-  float valueNoise(vec2 point) {
-    vec2 cell = floor(point);
-    vec2 local = fract(point);
-    local = local * local * (3.0 - 2.0 * local);
-    return mix(
-      mix(hash21(cell), hash21(cell + vec2(1.0, 0.0)), local.x),
-      mix(hash21(cell + vec2(0.0, 1.0)), hash21(cell + vec2(1.0, 1.0)), local.x),
-      local.y
-    );
-  }
-
-  float pigmentField(vec2 uv) {
-    float broad = valueNoise(uv * vec2(8.0, 11.0) + uSeed * 0.17);
-    float flakes = valueNoise(uv * vec2(27.0, 34.0) - uSeed * 0.31);
-    float bristles = 0.5 + 0.5 * sin(uv.y * 79.0 + uv.x * 17.0 + uSeed * 2.3);
-    return clamp(broad * 0.52 + flakes * 0.34 + bristles * 0.14, 0.0, 1.0);
-  }
 
   void main() {
     vUv = uv;
-    vPigmentField = pigmentField(uv);
-
-    float hoverCurve = smoothstep(0.02, 0.96, uHover);
-    float flake = smoothstep(0.43, 0.88, vPigmentField);
-    float flutter = 0.88 + 0.12 * sin(uTime * 2.8 + vPigmentField * 15.0 + uSeed);
-    vLift = hoverCurve * flake * flutter;
-
-    vec2 fromCenter = uv - 0.5 + vec2(0.001, -0.001);
-    vec2 liftDirection = normalize(fromCenter + vec2(
-      sin(uSeed * 1.7) * 0.13,
-      cos(uSeed * 1.3) * 0.11
-    ));
-
-    vec3 lifted = position;
-    lifted.xy += liftDirection * vLift * 0.17;
-    lifted.z += vLift * (0.18 + 0.055 * sin(uTime * 3.1 + uv.y * 31.0));
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(lifted, 1.0);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
 const PAINT_FRAGMENT_SHADER = /* glsl */ `
   uniform sampler2D uMap;
-  uniform float uHover;
+  uniform sampler2D uReveal;
   uniform float uOpacity;
+  uniform float uInside;
+  uniform float uRevealFloor;
+  uniform float uTime;
   uniform float uSeed;
   uniform vec3 uAccent;
   uniform vec3 uGesso;
 
   varying vec2 vUv;
-  varying float vPigmentField;
-  varying float vLift;
 
   float hash21(vec2 point) {
     point = fract(point * vec2(234.34, 435.345));
@@ -225,26 +207,26 @@ const PAINT_FRAGMENT_SHADER = /* glsl */ `
 
   void main() {
     vec4 paint = texture2D(uMap, vUv);
-    float hoverCurve = smoothstep(0.015, 0.98, uHover);
+    float storedReveal = texture2D(uReveal, vUv).r;
+    float reveal = max(storedReveal, uRevealFloor);
+    reveal = mix(reveal, 1.0, uInside);
 
-    // The threshold follows broad oil deposits plus short bristle interruptions.
-    // It reads as dry pigment lifting from linen instead of digital pixel noise.
-    float bristleBreak = hash21(floor(vUv * vec2(92.0, 126.0)) + uSeed);
-    float breakupField = clamp(vPigmentField * 0.86 + bristleBreak * 0.14, 0.0, 1.0);
-    float threshold = mix(-0.18, 0.64, hoverCurve);
-    float paintMask = smoothstep(threshold - 0.035, threshold + 0.06, breakupField);
+    float horizontalThread = 0.5 + 0.5 * sin(vUv.y * 1260.0 + uSeed);
+    float verticalThread = 0.5 + 0.5 * sin(vUv.x * 960.0 - uSeed * 1.7);
+    float fiber = horizontalThread * verticalThread;
+    float dust = hash21(floor(vUv * vec2(170.0, 214.0)) + uSeed);
+    vec3 darkGround = mix(vec3(0.025, 0.021, 0.017), uGesso * 0.11, fiber * 0.2 + dust * 0.035);
 
-    float wetEdge = smoothstep(threshold + 0.005, threshold + 0.045, breakupField)
-      * (1.0 - smoothstep(threshold + 0.045, threshold + 0.125, breakupField));
-    wetEdge *= hoverCurve;
+    float pigment = smoothstep(0.06, 0.72, reveal);
+    float wetEdge = smoothstep(0.08, 0.42, reveal)
+      * (1.0 - smoothstep(0.5, 0.88, reveal))
+      * (1.0 - uInside);
+    vec3 edgeColor = mix(uGesso, uAccent, 0.34);
+    vec3 color = mix(darkGround, paint.rgb, pigment);
+    color = mix(color, edgeColor, wetEdge * 0.42);
+    color += uInside * 0.018 * sin(uTime * 0.42 + vUv.y * 5.0 + uSeed);
 
-    vec3 chippedEdge = mix(uGesso, uAccent, 0.32 + vLift * 0.3);
-    vec3 color = mix(paint.rgb, chippedEdge, wetEdge * 0.92);
-    color += vLift * 0.055;
-
-    float alpha = paint.a * uOpacity * paintMask;
-    if (alpha < 0.018) discard;
-    gl_FragColor = vec4(color, alpha);
+    gl_FragColor = vec4(color, uOpacity);
   }
 `;
 
@@ -287,6 +269,7 @@ export class AtelierScene {
   private readonly hoverTargets: THREE.Object3D[] = [];
   private readonly chapters: ChapterMesh[] = [];
   private readonly reducedMotion: boolean;
+  private readonly hoverCapable: boolean;
   private readonly onFirstFrame?: () => void;
   private readonly onFailure?: (error: Error) => void;
   private readonly resizeObserver: ResizeObserver;
@@ -312,6 +295,7 @@ export class AtelierScene {
     this.canvas = canvas;
     this.works = works;
     this.reducedMotion = Boolean(options.reducedMotion);
+    this.hoverCapable = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
     this.onFirstFrame = options.onFirstFrame;
     this.onFailure = options.onFailure;
 
@@ -331,7 +315,7 @@ export class AtelierScene {
     canvas.setAttribute("role", "img");
     canvas.setAttribute(
       "aria-label",
-      "Sala tridimensional de Interactivision. Pasa el puntero sobre un lienzo para desprender su pigmento. Arrastra, usa la rueda o las flechas para recorrer seis obras.",
+      "Sala tridimensional de Interactivision. Mueve el puntero sobre un lienzo para revelar su pintura y haz clic para entrar. Arrastra, usa la rueda o las flechas para recorrer seis obras.",
     );
 
     this.scene.background = new THREE.Color("#0b0a08");
@@ -362,11 +346,20 @@ export class AtelierScene {
 
   setPointer(x: number, y: number, canHover = true) {
     this.pointerTarget.set(clamp(x, -1, 1), clamp(y, -1, 1));
-    this.pointerInside = canHover;
+    this.pointerInside = canHover && this.hoverCapable;
   }
 
   clearPointer() {
     this.pointerInside = false;
+    this.workMeshes.forEach((mesh) => {
+      mesh.lastRevealUv = null;
+    });
+  }
+
+  pickWorkAt(x: number, y: number) {
+    const hit = this.hitWork(x, y);
+    if (!hit || Math.abs(hit.index - this.targetProgress) > 1.45) return null;
+    return hit.index;
   }
 
   setDetail(index: number | null) {
@@ -374,7 +367,7 @@ export class AtelierScene {
       this.targetDetailMix = 0;
       return;
     }
-    this.detailIndex = clamp(index, 0, this.works.length - 1);
+    this.detailIndex = Math.round(clamp(index, 0, this.works.length - 1));
     this.targetDetailMix = 1;
   }
 
@@ -385,6 +378,70 @@ export class AtelierScene {
     const previous = mesh.art.material.uniforms.uMap.value as THREE.Texture;
     mesh.art.material.uniforms.uMap.value = canvasTexture(paintStudy(work.palette, seed), this.renderer);
     previous?.dispose();
+  }
+
+  private hitWork(x: number, y: number): WorkHit | null {
+    this.rayPointer.set(clamp(x, -1, 1), -clamp(y, -1, 1));
+    this.camera.updateMatrixWorld();
+    this.world.updateMatrixWorld(true);
+    this.raycaster.setFromCamera(this.rayPointer, this.camera);
+    const intersection = this.raycaster.intersectObjects(this.hoverTargets, false)[0];
+    if (!intersection) return null;
+    const index = this.workMeshes.findIndex((mesh) => mesh.art === intersection.object);
+    return index >= 0 ? { index, intersection } : null;
+  }
+
+  private stampReveal(mesh: WorkMesh, uv: THREE.Vector2) {
+    const current = new THREE.Vector2(uv.x, uv.y);
+    const previous = mesh.lastRevealUv;
+    const width = mesh.revealCanvas.width;
+    const height = mesh.revealCanvas.height;
+    const dx = previous ? (current.x - previous.x) * width : 0;
+    const dy = previous ? (previous.y - current.y) * height : 0;
+    const pixelDistance = Math.hypot(dx, dy);
+    if (previous && pixelDistance < 1.4) return;
+
+    const radius = width * 0.115;
+    const steps = previous ? clamp(Math.ceil(pixelDistance / (radius * 0.3)), 1, 12) : 1;
+    const angle = previous && pixelDistance > 0.1 ? Math.atan2(dy, dx) : -0.18;
+
+    for (let step = 1; step <= steps; step += 1) {
+      const mix = step / steps;
+      const pointX = THREE.MathUtils.lerp(previous?.x ?? current.x, current.x, mix) * width;
+      const pointY = (1 - THREE.MathUtils.lerp(previous?.y ?? current.y, current.y, mix)) * height;
+      const context = mesh.revealContext;
+
+      context.save();
+      context.globalCompositeOperation = "lighter";
+      context.translate(pointX, pointY);
+      context.rotate(angle);
+      context.scale(1.3, 0.72);
+      const softness = context.createRadialGradient(0, 0, radius * 0.04, 0, 0, radius);
+      softness.addColorStop(0, "rgba(255,255,255,0.98)");
+      softness.addColorStop(0.56, "rgba(255,255,255,0.72)");
+      softness.addColorStop(1, "rgba(255,255,255,0)");
+      context.fillStyle = softness;
+      context.beginPath();
+      context.arc(0, 0, radius, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+
+      context.save();
+      context.globalCompositeOperation = "lighter";
+      context.translate(pointX, pointY);
+      context.rotate(angle);
+      context.fillStyle = "rgba(255,255,255,0.2)";
+      for (let bristle = -4; bristle <= 4; bristle += 1) {
+        const offset = bristle * radius * 0.13;
+        const length = radius * (1.12 + 0.12 * Math.sin(bristle * 2.4 + pointX * 0.02));
+        context.fillRect(-length * 0.56, offset, length, 1.1 + (Math.abs(bristle) % 2));
+      }
+      context.restore();
+    }
+
+    mesh.lastRevealUv = current;
+    mesh.revealTexture.needsUpdate = true;
+    this.canvas.dataset.revealedWork = this.works[this.workMeshes.indexOf(mesh)]?.id ?? "";
   }
 
   private createLighting() {
@@ -448,12 +505,15 @@ export class AtelierScene {
       frame.position.z = -0.065;
 
       const texture = canvasTexture(paintStudy(work.palette, work.seed), this.renderer);
+      const reveal = revealTexture();
       const artMaterial = new THREE.ShaderMaterial({
         uniforms: {
           uMap: { value: texture },
-          uHover: { value: 0 },
-          uTime: { value: 0 },
+          uReveal: { value: reveal.texture },
           uOpacity: { value: 1 },
+          uInside: { value: 0 },
+          uRevealFloor: { value: this.hoverCapable && !this.reducedMotion ? 0 : 1 },
+          uTime: { value: 0 },
           uSeed: { value: work.seed },
           uAccent: { value: new THREE.Color(work.palette[3]) },
           uGesso: { value: new THREE.Color("#eadfcb") },
@@ -464,13 +524,25 @@ export class AtelierScene {
         depthWrite: true,
       });
       artMaterial.toneMapped = false;
-      const art = new THREE.Mesh(new THREE.PlaneGeometry(3.18, 4, 40, 52), artMaterial);
+      const art = new THREE.Mesh(new THREE.PlaneGeometry(3.18, 4, 1, 1), artMaterial);
       art.position.z = 0.072;
 
       group.add(shadow, frame, art);
       group.rotation.z = baseTilt;
       this.world.add(group);
-      this.workMeshes.push({ group, art, frame, shadow, baseY, baseTilt, hover: 0 });
+      this.workMeshes.push({
+        group,
+        art,
+        frame,
+        shadow,
+        revealCanvas: reveal.canvas,
+        revealContext: reveal.context,
+        revealTexture: reveal.texture,
+        lastRevealUv: null,
+        baseY,
+        baseTilt,
+        hover: 0,
+      });
       this.hoverTargets.push(art);
     });
   }
@@ -606,26 +678,53 @@ export class AtelierScene {
     this.world.position.x = -this.progress * CARD_SPACING;
 
     this.workMeshes.forEach((mesh, index) => {
+      const work = this.works[index];
       const offset = index - this.progress;
       const distance = Math.abs(offset);
       const activeDetail = index === this.detailIndex ? this.detailMix : 0;
       const focus = clamp(1 - distance * 0.42, 0.08, 1);
       const idle = this.reducedMotion ? 0 : Math.sin(now * 0.00055 + index * 1.7) * 0.035 * focus;
-      const detailShift = this.canvas.clientWidth < 700 ? 0.15 : 2.1;
-      mesh.group.position.x = index * CARD_SPACING + activeDetail * detailShift;
-      mesh.group.position.y = damp(mesh.group.position.y, mesh.baseY + idle + activeDetail * 0.05, 7, dt);
-      mesh.group.position.z = damp(mesh.group.position.z, -distance * 1.22 + activeDetail * 2.35, 7, dt);
+      const insideDistance = clamp(2.78 - (work.zoom - 2) * 0.06, 2.62, 2.78);
+      const viewportHeight = 2
+        * Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5))
+        * insideDistance;
+      const viewportWidth = viewportHeight * this.camera.aspect;
+      const coverScale = Math.max(viewportWidth / 3.18, viewportHeight / 4)
+        * (1.055 + (work.zoom - 2) * 0.018);
+      const normalScale = clamp(1 - distance * 0.105, 0.58, 1) + mesh.hover * 0.018;
+      const detailX = this.progress * CARD_SPACING - this.pointer.x * 0.06;
+      const detailY = -this.pointer.y * 0.055;
+
+      mesh.group.position.x = THREE.MathUtils.lerp(index * CARD_SPACING, detailX, activeDetail);
+      mesh.group.position.y = damp(
+        mesh.group.position.y,
+        THREE.MathUtils.lerp(mesh.baseY + idle, detailY, activeDetail),
+        7,
+        dt,
+      );
+      mesh.group.position.z = damp(
+        mesh.group.position.z,
+        THREE.MathUtils.lerp(-distance * 1.22, this.camera.position.z - insideDistance, activeDetail),
+        7,
+        dt,
+      );
       mesh.group.rotation.y = damp(mesh.group.rotation.y, clamp(-offset * 0.24, -0.72, 0.72) * (1 - activeDetail), 7, dt);
-      mesh.group.rotation.z = damp(mesh.group.rotation.z, mesh.baseTilt * (1 - activeDetail), 7, dt);
-      const scale = clamp(1 - distance * 0.105, 0.58, 1) + activeDetail * 0.24;
+      mesh.group.rotation.z = damp(
+        mesh.group.rotation.z,
+        THREE.MathUtils.lerp(mesh.baseTilt, THREE.MathUtils.degToRad(work.angle), activeDetail),
+        7,
+        dt,
+      );
+      const scale = THREE.MathUtils.lerp(normalScale, coverScale, activeDetail);
       mesh.group.scale.setScalar(damp(mesh.group.scale.x, scale, 7, dt));
 
       const otherFade = this.detailMix > 0 && index !== this.detailIndex ? 1 - this.detailMix * 0.93 : 1;
       const opacity = clamp((0.26 + focus * 0.74) * otherFade, 0.02, 1);
       mesh.art.material.uniforms.uOpacity.value = opacity;
+      mesh.art.material.uniforms.uInside.value = activeDetail;
       mesh.art.material.uniforms.uTime.value = now * 0.001;
-      mesh.frame.material.opacity = opacity;
-      mesh.shadow.material.opacity = 0.34 * opacity;
+      mesh.frame.material.opacity = opacity * (1 - activeDetail);
+      mesh.shadow.material.opacity = 0.34 * opacity * (1 - activeDetail);
       mesh.group.visible = distance < 3.8 || activeDetail > 0.01;
     });
 
@@ -641,23 +740,20 @@ export class AtelierScene {
       });
     });
 
-    this.camera.position.x = damp(this.camera.position.x, this.pointer.x * 0.22, 4.5, dt);
-    this.camera.position.y = damp(this.camera.position.y, 0.05 - this.pointer.y * 0.16, 4.5, dt);
-    this.lookTarget.set(this.pointer.x * 0.08, -this.pointer.y * 0.06, 0);
+    const parallax = THREE.MathUtils.lerp(1, 0.28, this.detailMix);
+    this.camera.position.x = damp(this.camera.position.x, this.pointer.x * 0.22 * parallax, 4.5, dt);
+    this.camera.position.y = damp(this.camera.position.y, 0.05 - this.pointer.y * 0.16 * parallax, 4.5, dt);
+    this.lookTarget.set(this.pointer.x * 0.08 * parallax, -this.pointer.y * 0.06 * parallax, 0);
     this.camera.lookAt(this.lookTarget);
 
     let nextHoveredIndex = -1;
-    const canLiftPaint = this.pointerInside && !this.reducedMotion && this.detailMix < 0.025;
-    if (canLiftPaint) {
-      // Pointer y is stored in screen coordinates (down is positive); Raycaster uses NDC.
-      this.rayPointer.set(this.pointerTarget.x, -this.pointerTarget.y);
-      this.camera.updateMatrixWorld();
-      this.world.updateMatrixWorld(true);
-      this.raycaster.setFromCamera(this.rayPointer, this.camera);
-      const hit = this.raycaster.intersectObjects(this.hoverTargets, false)[0];
-      if (hit) {
-        const index = this.workMeshes.findIndex((mesh) => mesh.art === hit.object);
-        if (index >= 0 && Math.abs(index - this.progress) < 2.6) nextHoveredIndex = index;
+    const canRevealPaint = this.pointerInside && !this.reducedMotion && this.detailMix < 0.025;
+    if (canRevealPaint) {
+      const hit = this.hitWork(this.pointerTarget.x, this.pointerTarget.y);
+      if (hit && Math.abs(hit.index - this.targetProgress) <= 1.45) {
+        nextHoveredIndex = hit.index;
+        const uv = hit.intersection.uv;
+        if (uv) this.stampReveal(this.workMeshes[hit.index], uv);
       }
     }
 
@@ -667,7 +763,7 @@ export class AtelierScene {
     this.workMeshes.forEach((mesh, index) => {
       const targetHover = index === this.hoveredIndex ? 1 : 0;
       mesh.hover = damp(mesh.hover, targetHover, targetHover ? 8.8 : 6.2, dt);
-      mesh.art.material.uniforms.uHover.value = mesh.hover;
+      if (index !== this.hoveredIndex) mesh.lastRevealUv = null;
     });
 
     try {
@@ -694,6 +790,7 @@ export class AtelierScene {
     this.canvas.removeEventListener("webglcontextlost", this.handleContextLost);
     this.canvas.classList.remove("is-art-hovered");
     delete this.canvas.dataset.hoveredWork;
+    delete this.canvas.dataset.revealedWork;
 
     this.scene.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
@@ -701,11 +798,10 @@ export class AtelierScene {
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       materials.forEach((material) => {
         if ("map" in material && material.map instanceof THREE.Texture) material.map.dispose();
-        if (
-          material instanceof THREE.ShaderMaterial
-          && material.uniforms.uMap?.value instanceof THREE.Texture
-        ) {
-          material.uniforms.uMap.value.dispose();
+        if (material instanceof THREE.ShaderMaterial) {
+          Object.values(material.uniforms).forEach((uniform) => {
+            if (uniform.value instanceof THREE.Texture) uniform.value.dispose();
+          });
         }
         material.dispose();
       });
